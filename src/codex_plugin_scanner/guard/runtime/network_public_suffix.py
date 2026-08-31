@@ -31,8 +31,24 @@ def _bundled_psl() -> _PublicSuffixList:
 
 
 def registrable_domain(host: str) -> str | None:
-    """Return canonical eTLD+1 using the packaged PSL snapshot, or None for a suffix."""
+    """Return canonical eTLD+1 using the packaged PSL snapshot, or None for anything
+    that isn't a syntactically valid, registrable hostname.
 
-    canonical = Destination(DestinationKind.HOST, host).value
-    result = _bundled_psl().privatesuffix(canonical)
+    `Destination`'s strict-hostname validation (IDNA/std3 label rules, length
+    limits, ...) raises `ValueError` for anything that doesn't look like a
+    real hostname — the right behavior for its original strict-validation
+    callers, but this function is also called heuristically on arbitrary
+    regex-matched substrings from free-form text and code (e.g. `guard/risk.py`
+    scanning a skill's source for accidental network references), where
+    "not a valid host" is an expected, common outcome, not an exceptional
+    one. Treat any rejection here — from hostname validation or from the
+    third-party PSL library itself — as "not a host" rather than letting it
+    propagate and crash the caller.
+    """
+
+    try:
+        canonical = Destination(DestinationKind.HOST, host).value
+        result = _bundled_psl().privatesuffix(canonical)
+    except (ValueError, LookupError, RecursionError, UnicodeError):
+        return None
     return str(result) if result is not None else None
