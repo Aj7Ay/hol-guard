@@ -27,6 +27,14 @@ def _configure_guard_local_parsers(
     _add_guard_common_args(status_parser)
     status_parser.add_argument("--json", action="store_true")
 
+    verify_launcher_parser = guard_subparsers.add_parser(
+        "verify-launcher",
+        help="Check whether a harness's plain command on PATH is the Guard-protected launcher",
+    )
+    _add_guard_common_args(verify_launcher_parser)
+    verify_launcher_parser.add_argument("harness")
+    verify_launcher_parser.add_argument("--json", action="store_true")
+
     network_parser = guard_subparsers.add_parser(
         "network",
         help="Inspect local network protection capabilities",

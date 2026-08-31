@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from .models import GuardArtifact
 from .risk_exfil import detect_exfil_intent
+from .runtime.network_public_suffix import registrable_domain
 from .runtime.secret_sensitivity import classify_legacy_secret_path_families
 from .runtime.signals import RiskSignalV2
 from .types import GuardSignal
@@ -311,6 +312,13 @@ def extract_network_hosts(text: str) -> set[str]:
         lowered = value.lower()
         suffix = lowered.rsplit(".", 1)[-1]
         if lowered in _NON_NETWORK_EXACT_FILENAMES or suffix in _NON_NETWORK_SUFFIXES:
+            continue
+        # A dotted identifier such as `proc.returncode` or `sys.argv` is
+        # syntactically indistinguishable from a hostname by this regex
+        # alone. Require the candidate to resolve to a real registrable
+        # domain (a recognized public suffix) before treating it as a
+        # network host.
+        if registrable_domain(lowered) is None:
             continue
         hosts.add(lowered)
     return hosts

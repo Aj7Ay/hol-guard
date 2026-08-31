@@ -1107,12 +1107,21 @@ def evaluate_detection(
                 default_action=effective_default_action,
                 config=config,
                 changed=bool(diff["changed"]),
+                first_seen=is_first_seen,
             )
         scanner_action = _default_action_from_verdict(verdict)
-        current_policy_action = most_restrictive_guard_action(
-            current_policy_action,
-            scanner_action,
-        )
+        if effective_default_action is not None and scanner_action in {"warn", "require-reapproval"}:
+            # An explicit `--default-action`/per-harness `default_action` is an
+            # authoritative ceiling for the scanner's *heuristic* classifications
+            # (warn/require-reapproval derived from severity scoring). It must
+            # never suppress a genuine hard signal (block/sandbox-required),
+            # which still widens below regardless of the configured default.
+            pass
+        else:
+            current_policy_action = most_restrictive_guard_action(
+                current_policy_action,
+                scanner_action,
+            )
         skill_directory_identity_reusable = _skill_directory_identity_reusable(
             artifact_type=artifact.artifact_type,
             metadata=artifact.metadata,

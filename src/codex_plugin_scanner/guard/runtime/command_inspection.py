@@ -84,7 +84,8 @@ def inspect_command(
                 "action_class": None,
                 "reason": (
                     "No built-in command safety extension matched. Other Guard protections and final policy were not "
-                    "evaluated."
+                    "evaluated. `command test`/`command explain` only inspect raw shell command text — to test a "
+                    "skill or other harness artifact instead, use `hol-guard scan --deep skills <workspace>`."
                 ),
                 "normalized_command": command_text,
                 "wrapper_chain": [],

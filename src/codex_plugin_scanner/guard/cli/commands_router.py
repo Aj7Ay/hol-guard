@@ -36,6 +36,7 @@ _COMMON_HANDLERS = {
     "protect": "_run_guard_protect_command",
     "start": "_run_guard_start_command",
     "status": "_run_guard_status_command",
+    "verify-launcher": "_run_guard_verify_launcher_command",
     "risk-report": "run_guard_risk_report_command",
     "network": "_run_guard_network_command",
     "init": "_run_guard_init_command",

@@ -15,15 +15,15 @@ def build_managed_install_plan(
 ) -> dict[str, object]:
     targets = _resolve_targets("install", requested_harness, install_all, context, store)
     plans = [build_harness_setup_plan("connect", harness, context, dry_run=True) for harness in targets]
-    payload: dict[str, object] = {
+    # `setup_plans` is the single source of truth. It used to also be aliased
+    # whole to `setup_plan` and flattened key-by-key onto the top level when
+    # there was exactly one target, which put `setup_steps`/`verify_steps`/
+    # `repair_steps`/`coverage` in the output three times over.
+    return {
         "dry_run": True,
         "setup_plans": plans,
         "auto_detected": requested_harness is None or install_all,
     }
-    if len(plans) == 1:
-        payload["setup_plan"] = plans[0]
-        payload.update(plans[0])
-    return payload
 
 
 __all__ = ["build_managed_install_plan"]

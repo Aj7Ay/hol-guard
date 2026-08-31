@@ -7,6 +7,7 @@ from pathlib import PurePath
 from urllib.parse import SplitResult, urlsplit
 
 from .models import GuardArtifact
+from .runtime.network_public_suffix import registrable_domain
 from .types import CapabilityDelta, CapabilitySet, TransportKind
 
 _URL_PATTERN = re.compile(r"https?://[^\s'\"`]+", re.IGNORECASE)
@@ -316,6 +317,14 @@ def _extract_network_hosts(text: str, url: str | None) -> set[str]:
         lowered = candidate.lower()
         suffix = lowered.rsplit(".", 1)[-1]
         if suffix in _NON_NETWORK_SUFFIXES:
+            continue
+        # A dotted identifier such as `proc.returncode` or `colors.primary` is
+        # syntactically indistinguishable from a hostname by this regex alone.
+        # Require the candidate to resolve to a real registrable domain (a
+        # recognized public suffix, e.g. `.com`/`.io`) before treating it as a
+        # network host; `returncode`/`primary`/`argv`/... are not valid TLDs
+        # and are rejected here.
+        if registrable_domain(lowered) is None:
             continue
         hosts.add(lowered)
     return hosts

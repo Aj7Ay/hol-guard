@@ -164,17 +164,34 @@ class OpenClawHarnessAdapter(HarnessAdapter):
         manifest = _json_payload(managed_root(context) / "manifest.json")
         overlay_path = manifest.get("managed_overlay_path")
         pretool_path = manifest.get("pretool_hook_path")
-        return {
-            "command": _run_command_probe([self.executable, "--help"]) if _command_available(self.executable) else None,
-            "managed_install_present": bool(manifest),
-            "managed_install_ready": (
-                isinstance(overlay_path, str)
-                and Path(overlay_path).exists()
-                and isinstance(pretool_path, str)
-                and Path(pretool_path).exists()
-            ),
-            "cloud_agent_identity_configured": bool(cloud_agent_identity_hints(context, runtime=self.harness)),
-        }
+        # Keep this flat (see HermesHarnessAdapter.runtime_probe for why):
+        # doctor's renderer expects top-level `ok`/`return_code`, not a probe
+        # dict nested under "command".
+        probe_result = _run_command_probe([self.executable, "--help"]) if _command_available(self.executable) else None
+        payload: dict[str, object] = (
+            dict(probe_result)
+            if isinstance(probe_result, dict)
+            else {
+                "command": [self.executable, "--help"],
+                "ok": False,
+                "return_code": None,
+                "stdout": "",
+                "stderr": "command not found",
+            }
+        )
+        payload.update(
+            {
+                "managed_install_present": bool(manifest),
+                "managed_install_ready": (
+                    isinstance(overlay_path, str)
+                    and Path(overlay_path).exists()
+                    and isinstance(pretool_path, str)
+                    and Path(pretool_path).exists()
+                ),
+                "cloud_agent_identity_configured": bool(cloud_agent_identity_hints(context, runtime=self.harness)),
+            }
+        )
+        return payload
 
     def approval_flow(self, *, managed_install: dict[str, object] | None = None) -> dict[str, object]:
         manifest = managed_install.get("manifest") if isinstance(managed_install, dict) else None

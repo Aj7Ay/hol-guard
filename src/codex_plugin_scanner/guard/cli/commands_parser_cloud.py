@@ -46,6 +46,11 @@ def _configure_guard_cloud_parsers(
         help="Named connection profile for multi-environment usage.",
     )
     login_parser.add_argument("--json", action="store_true")
+    login_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the interactive confirmation before starting Guard Cloud sign-in.",
+    )
     connect_parser = guard_subparsers.add_parser(
         "connect",
         help="Open browser OAuth, pair this runtime to HOL Guard, and send the first sync",
