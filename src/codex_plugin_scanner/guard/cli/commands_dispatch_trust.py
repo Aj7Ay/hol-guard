@@ -15,7 +15,11 @@ from ...version import __version__
 from ..adapters.base import HarnessContext
 from ..config import GuardConfig
 from ..daemon.manager import _guard_daemon_url_port, _load_state, load_guard_daemon_url, read_approval_center_locator
-from ..local_trust_contract import TrustStatus
+from ..local_trust_contract import (
+    POLICY_INTEGRITY_REASON_CONTROL_UNAVAILABLE,
+    POLICY_INTEGRITY_REASON_KEY_UNAVAILABLE,
+    TrustStatus,
+)
 from ..local_trust_controller import macos_native_backend_supported, resolve_passive_trust_state
 from ..policy_integrity import is_remote_policy_source
 from ..store import GuardStore
@@ -101,6 +105,39 @@ def _now() -> str:
     from ._commands_shared import _now as _shared_now
 
     return _shared_now()
+
+
+_POLICY_INTEGRITY_DEGRADED_REASONS = frozenset(
+    {POLICY_INTEGRITY_REASON_KEY_UNAVAILABLE, POLICY_INTEGRITY_REASON_CONTROL_UNAVAILABLE}
+)
+
+
+def _trust_setup_next_action(payload: dict[str, object], trust_command: str) -> str | None:
+    """Point `trust setup`/`trust reset` at the real fix when the *policy
+    integrity store* (not the local trust backend) is what's degraded.
+
+    A "no explicit local trust backend" error is only about backend
+    selection on this platform; it says nothing about whether the policy
+    integrity store itself is degraded and separately repairable. Without
+    this check, a degraded policy store gets a generic, dead-end
+    `next_action` that never mentions the one command that actually fixes
+    it: `hol-guard policies migrate-local-integrity`.
+    """
+
+    if trust_command != "setup":
+        return None
+    reasons = payload.get("degraded_reasons")
+    reason_set = set(reasons) if isinstance(reasons, list) else set()
+    is_policy_integrity_degraded = payload.get("mode") == "degraded_safe" or bool(
+        reason_set & _POLICY_INTEGRITY_DEGRADED_REASONS
+    )
+    if not is_policy_integrity_degraded:
+        return None
+    return (
+        "The policy integrity store is degraded, which disables remembered rules "
+        "regardless of the local trust backend. Run `hol-guard policies "
+        "migrate-local-integrity --preserve-all-local` to repair it."
+    )
 
 
 def _trust_status_payload(
@@ -514,7 +551,7 @@ def _run_guard_trust_command(
                 if trust_command == "setup"
                 else "No explicit local trust backend is active to reset."
             )
-            payload["next_action"] = (
+            payload["next_action"] = _trust_setup_next_action(payload, trust_command) or (
                 "Runtime protection remains active. Broad remembered local rules stay limited."
                 if trust_command == "setup"
                 else "Nothing changed."
@@ -527,7 +564,7 @@ def _run_guard_trust_command(
                 if trust_command == "setup"
                 else "No explicit local trust backend is active to reset."
             )
-            payload["next_action"] = (
+            payload["next_action"] = _trust_setup_next_action(payload, trust_command) or (
                 "Guard already uses the default passive backend on this platform."
                 if trust_command == "setup"
                 else "Nothing changed."

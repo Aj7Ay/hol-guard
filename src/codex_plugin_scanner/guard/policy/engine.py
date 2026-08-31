@@ -21,11 +21,26 @@ def decide_action(
     default_action: str | None,
     config: GuardConfig,
     changed: bool,
+    *,
+    first_seen: bool = False,
 ) -> GuardAction:
-    """Resolve the effective policy action."""
+    """Resolve the effective policy action.
+
+    ``changed`` is set both when an artifact is brand new (no prior baseline
+    exists at all) and when a previously-seen artifact's content hash
+    actually changed. Those are not the same event: a changed hash on a
+    known artifact is a possible supply-chain swap and must stay routed
+    through ``changed_hash_action`` (``require-reapproval``), which saved
+    policy can never silently bypass (see ``runtime/approval_reuse.py``). A
+    first-seen artifact has no baseline to have changed from, and is exactly
+    what a harness- or global-scope ``allow`` rule is meant to pre-clear, so
+    it is classified as a plain ``review`` instead.
+    """
 
     if configured_action is not None:
         return normalize_guard_action(configured_action, unknown_action=SAFE_DEFAULT_ACTION)
+    if changed and first_seen:
+        return normalize_guard_action("review", unknown_action=SAFE_CHANGED_HASH_ACTION)
     if changed:
         return normalize_guard_action(
             config.changed_hash_action,
@@ -56,11 +71,13 @@ def decide_action_with_v2(
     *,
     reason: str,
     signals: Sequence[RiskSignalV2] = (),
+    first_seen: bool = False,
 ) -> tuple[GuardAction, GuardDecisionV2]:
     action = decide_action(
         configured_action=configured_action,
         default_action=default_action,
         config=config,
         changed=changed,
+        first_seen=first_seen,
     )
     return action, build_decision_v2(action, reason=reason, signals=signals)

@@ -225,8 +225,18 @@ def emit_guard_payload(command: str, payload: PayloadDict, as_json: bool) -> Non
     """Render Guard payloads as JSON or human-friendly rich output."""
 
     if as_json:
-        redacted_output = redact_text(_safe_json_output_text(command, payload))
-        sys.stdout.write(redacted_output.text)
+        # `_safe_json_output_text` already redacts every string value in the
+        # payload (per-field, via `_redact_payload`, below) before
+        # serializing it. A second `redact_text()` pass used to run over the
+        # already-serialized JSON *text* using line-anchored regexes
+        # (`secret-env`, `connection-env`, ...); those match "to end of
+        # line", so a payload string that happened to contain a
+        # `KEY=value`-shaped substring would have everything after it on
+        # that line — including the closing quote/comma/bracket — replaced,
+        # corrupting the JSON. Redaction now happens once, per-field, before
+        # serialization (see `_redact_payload`), which keeps every
+        # `redaction.py` pattern in effect without ever touching JSON syntax.
+        sys.stdout.write(_safe_json_output_text(command, payload))
         sys.stdout.write("\n")
         return
 
@@ -234,8 +244,7 @@ def emit_guard_payload(command: str, payload: PayloadDict, as_json: bool) -> Non
     if not _RICH_AVAILABLE:
         plain_renderer = _PLAIN_TEXT_RENDERERS.get(command)
         if plain_renderer is None:
-            redacted_output = redact_text(_safe_json_output_text(command, payload))
-            sys.stdout.write(redacted_output.text)
+            sys.stdout.write(_safe_json_output_text(command, payload))
         else:
             sys.stdout.write(plain_renderer(redacted_payload))
         sys.stdout.write("\n")
@@ -277,6 +286,14 @@ def _redact_payload(value: object, *, key: str | None = None, command: str | Non
         )
         for pattern, replacement in patterns:
             redacted = pattern.sub(replacement, redacted)
+        # Also apply the general `redaction.py` patterns (AWS/npm/GitHub
+        # tokens, connection strings, remote-pairing codes, ...) here, scoped
+        # to this single field value. This used to run once, after
+        # serialization, over the whole JSON *text* via line-anchored
+        # regexes that could eat past a value's closing quote/comma/bracket
+        # into the next field; doing it per-field, pre-serialization, keeps
+        # every pattern in effect without ever touching JSON syntax.
+        redacted = redact_text(redacted).text
         return redact_local_path(redacted)
     return value
 
@@ -828,7 +845,7 @@ def _render_doctor(console: Console, payload: dict[str, object]) -> None:
         summary.add_row("Harness", f"[bold]{payload.get('harness', 'unknown')}[/bold]")
         summary.add_row("Installed", _bool_label(bool(payload.get("installed"))))
         summary.add_row("Command", _bool_label(bool(payload.get("command_available"))))
-        summary.add_row("Artifacts", str(len(_coerce_dict_list(payload.get("artifacts")))))
+        summary.add_row("Artifacts", str(len(_coerce_dict_list(payload.get("artifacts")))) + _artifact_change_suffix(payload.get("artifact_changes")))
         registry = payload.get("runtime_detector_registry")
         if isinstance(registry, dict):
             registry_state = "enabled" if bool(registry.get("enabled")) else "disabled"
@@ -2831,6 +2848,26 @@ def _coerce_dict_list(value: object) -> list[PayloadDict]:
     if not isinstance(value, list):
         return []
     return [_coerce_object_dict(item) for item in value if isinstance(item, dict)]
+
+
+def _artifact_change_suffix(value: object) -> str:
+    """Render a short "(N changed)" hint next to a bare artifact count.
+
+    A raw artifact count from a live filesystem scan can move between
+    `doctor` runs with no user action against Guard; naming how many (and
+    which) artifacts actually changed makes that legible instead of leaving
+    it as an unexplained number.
+    """
+
+    changes = _coerce_object_dict(value)
+    if not changes.get("available"):
+        return ""
+    changed_count = changes.get("changed_count")
+    if not isinstance(changed_count, int) or changed_count <= 0:
+        return ""
+    names = [str(item.get("artifact_id")) for item in _coerce_dict_list(changes.get("changed"))[:3]]
+    detail = f": {', '.join(names)}" if names else ""
+    return f" ({changed_count} changed{detail})"
 
 
 def _coerce_string_list(value: object) -> list[str]:

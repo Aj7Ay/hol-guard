@@ -254,7 +254,7 @@ hol-guard doctor            # run a probe and see which detectors are active
 hol-guard doctor --perf     # include per-detector timing
 ```
 
-If the block looks like a false positive, you can approve it from the receipts view or from the dashboard at `http://localhost:6174`.
+If the block looks like a false positive, you can approve it from the receipts view or from the dashboard (`hol-guard dashboard`, or `hol-guard status --json` for the live URL/port).
 
 ### How do I clear approvals?
 
@@ -265,7 +265,7 @@ hol-guard approvals         # list pending approvals
 hol-guard approvals clear   # clear all pending approvals (prompts for confirmation)
 ```
 
-From the dashboard: open `http://localhost:6174`, go to the **Approval Center**, and use the **Clear all** button. You will be asked to confirm before any approvals are removed.
+From the dashboard: run `hol-guard dashboard` (or check `hol-guard status --json` for the live URL/port), go to the **Approval Center**, and use the **Clear all** button. You will be asked to confirm before any approvals are removed.
 
 ### How do I require human proof before saved approvals?
 

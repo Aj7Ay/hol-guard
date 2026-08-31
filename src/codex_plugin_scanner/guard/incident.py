@@ -115,7 +115,10 @@ def _fallback_risk_headline(policy_action: GuardAction) -> str:
         case "require-reapproval":
             return "Policy requires fresh approval before this action can continue."
         case "sandbox-required":
-            return "Policy requires this action to use an approved sandbox."
+            return (
+                "Policy requires this action to run inside Guard-owned containment "
+                "(`hol-guard contained-write` for a write, `hol-guard verified-read` for a read)."
+            )
         case "block":
             return "Policy blocks this action."
 
@@ -130,7 +133,11 @@ def _why_now_text(
     if policy_action == "block":
         return "HOL Guard blocked this action because the authoritative policy does not permit it."
     if policy_action == "sandbox-required":
-        return "HOL Guard requires an approved sandbox before this action can continue."
+        return (
+            "HOL Guard requires this action to run inside Guard-owned containment before it can "
+            "continue. Run `hol-guard contained-write` for a write, or `hol-guard verified-read` for "
+            "a read; use `hol-guard network status` to inspect current containment capabilities."
+        )
     if policy_action in {"allow", "warn"}:
         return _nonblocking_why_now_text(
             normalized=normalized,

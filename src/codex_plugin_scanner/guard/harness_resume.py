@@ -80,10 +80,20 @@ def resume_harness_operation(
                 "continuationStatus": continuation.get("continuationStatus"),
                 "harnessResume": detail,
             }
-    # Pi/OMP/Grok have no proven original-session continuation transport.  A
-    # locally applied allow therefore requires an explicit retry, not a resume.
+    # Pi/OMP/Grok/Hermes/OpenClaw have no proven original-session continuation
+    # transport.  A locally applied allow therefore requires an explicit
+    # retry, not a resume.
     continuation_status = "manual_retry_required" if normalized_action == "allow" else "blocked_not_resumed"
     operation_status = "manual_retry_required" if normalized_action == "allow" else "blocked"
+    resume_message = (
+        f"{canonical_harness} has no native session-resume support. This request was allowed, but the "
+        f"original action was not automatically resumed — retry it in {canonical_harness}."
+        if normalized_action == "allow"
+        else (
+            f"{canonical_harness} has no native session-resume support. This request was blocked; the "
+            f"original action will not run in {canonical_harness}."
+        )
+    )
     metadata = operation.get("metadata")
     safe_metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
     safe_metadata["resume_action"] = normalized_action
@@ -117,6 +127,7 @@ def resume_harness_operation(
             "reason": continuation_status,
             "status": continuation_status,
             "supported": False,
+            "message": resume_message,
         },
     }
     with suppress(Exception):

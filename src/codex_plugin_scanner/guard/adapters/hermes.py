@@ -318,19 +318,49 @@ class HermesHarnessAdapter(HarnessAdapter):
         manifest = _json_payload(_managed_root(context) / "manifest.json")
         overlay_path = manifest.get("mcp_overlay_path")
         pretool_path = manifest.get("pretool_hook_path")
-        return {
-            "command": _run_command_probe([self.executable, "--help"]) if _command_available(self.executable) else None,
-            "managed_install_present": bool(manifest),
-            "managed_install_ready": (
-                isinstance(overlay_path, str)
-                and Path(overlay_path).exists()
-                and isinstance(pretool_path, str)
-                and Path(pretool_path).exists()
-            ),
-            "cloud_agent_identity_configured": bool(cloud_agent_identity_hints(context, runtime=self.harness)),
-        }
+        # `doctor`'s rendering (cli/render.py) expects a flat probe dict with
+        # top-level `ok`/`return_code`/`command`/`stdout`/`stderr`, matching
+        # what `_run_command_probe` returns directly. Merge it at the top
+        # level instead of nesting it under a "command" key, which previously
+        # hid `ok`/`return_code` from the renderer (always showing
+        # "Succeeded no") and dumped the whole nested dict, untruncated, into
+        # the "Command" row.
+        probe_result = _run_command_probe([self.executable, "--help"]) if _command_available(self.executable) else None
+        payload: dict[str, object] = (
+            dict(probe_result)
+            if isinstance(probe_result, dict)
+            else {
+                "command": [self.executable, "--help"],
+                "ok": False,
+                "return_code": None,
+                "stdout": "",
+                "stderr": "command not found",
+            }
+        )
+        payload.update(
+            {
+                "managed_install_present": bool(manifest),
+                "managed_install_ready": (
+                    isinstance(overlay_path, str)
+                    and Path(overlay_path).exists()
+                    and isinstance(pretool_path, str)
+                    and Path(pretool_path).exists()
+                ),
+                "cloud_agent_identity_configured": bool(cloud_agent_identity_hints(context, runtime=self.harness)),
+            }
+        )
+        return payload
 
     def approval_flow(self, *, managed_install: dict[str, object] | None = None) -> dict[str, object]:
+        # Hermes has no proven in-session continuation transport (see
+        # `adapters/contracts.py`'s HermesHarnessProtectionContract and
+        # `harness_resume.py`): once this synchronous tool-call/launch check
+        # returns to Hermes, Guard cannot reach back into that already-idle
+        # process to push a later approval into it. Approving the request
+        # afterward does not resume the original action — the user must
+        # retry it. Say that explicitly here, since this `fallback_hint`
+        # feeds directly into the `review_hint` shown to the user the moment
+        # a request is queued (see `approvals.approval_center_hint`).
         manifest = managed_install.get("manifest") if isinstance(managed_install, dict) else None
         capabilities = manifest.get("capabilities") if isinstance(manifest, dict) else None
         same_channel = isinstance(capabilities, dict) and bool(capabilities.get("same_channel"))
@@ -340,14 +370,22 @@ class HermesHarnessAdapter(HarnessAdapter):
                 "summary": (
                     "Guard uses the managed Hermes same-channel seam first and falls back to the approval center."
                 ),
-                "fallback_hint": "Use the Guard approval center if Hermes does not surface the pending request inline.",
+                "fallback_hint": (
+                    "If Hermes does not surface the pending request inline, run `hol-guard approvals` in another "
+                    "terminal to see and approve it. Hermes does not automatically resume after approval — retry "
+                    "the blocked action in Hermes once it's approved."
+                ),
                 "prompt_channel": _HERMES_MANAGED_PROMPT_CHANNEL,
                 "auto_open_browser": False,
             }
         return {
             "tier": "approval-center",
             "summary": "Guard keeps Hermes approvals in the local approval center without forcing a browser open.",
-            "fallback_hint": "Resolve pending Hermes requests from the Guard approval center.",
+            "fallback_hint": (
+                "Run `hol-guard approvals` in another terminal to see and approve pending Hermes requests. Hermes "
+                "does not automatically resume after approval — retry the blocked action in Hermes once it's "
+                "approved."
+            ),
             "prompt_channel": "native-fallback",
             "auto_open_browser": False,
         }
@@ -696,18 +734,43 @@ class HermesHarnessAdapter(HarnessAdapter):
             return []
 
         found_paths.append(str(manifest_path))
-        # Manifest stores servers keyed as "yaml:<name>" / "json:<name>".
-        # Re-key by the real server name so artifacts report the correct name.
-        real_servers: dict[str, dict[str, object]] = {}
-        for _key, server_config in servers.items():
+        # Each manifest entry carries its original discovery source in its
+        # own "source" field ("yaml"/"json", set by `_load_mcp_server_sources`
+        # when the manifest was written), and the dict key retains it too as
+        # a "<source>:<name>" prefix. Group by that source and reuse it for
+        # the artifact id, instead of a fixed "manifest" tag, so this
+        # fallback scan (triggered whenever the live config.yaml/
+        # mcp_servers.json scan finds nothing — e.g. right after a reinstall,
+        # before Hermes has reloaded config) produces the same
+        # `hermes:mcp:<source>:<name>` identity the live scan would. Using a
+        # fixed "manifest" tag here previously flipped every server's
+        # artifact id in one shot, discarding all first-seen/approval
+        # history for the harness even though nothing about the real
+        # servers had changed.
+        servers_by_source: dict[str, dict[str, dict[str, object]]] = {}
+        for key, server_config in servers.items():
             if not isinstance(server_config, dict):
                 continue
-            real_name = server_config.get("name")
-            if isinstance(real_name, str) and real_name:
-                real_servers[real_name] = server_config
-            elif isinstance(_key, str):
-                real_servers[_key] = server_config
-        return self._mcp_artifacts(real_servers, str(manifest_path), source="manifest")
+            recorded_source = server_config.get("source")
+            source = recorded_source if recorded_source in {"yaml", "json"} else "manifest"
+            real_name: str | None = None
+            if source == "manifest" and isinstance(key, str) and ":" in key:
+                prefix, _, suffix = key.partition(":")
+                if prefix in {"yaml", "json"} and suffix:
+                    source = prefix
+                    real_name = suffix
+            configured_name = server_config.get("name")
+            name = real_name or (configured_name if isinstance(configured_name, str) and configured_name else None)
+            if name is None and isinstance(key, str):
+                name = key
+            if name is None:
+                continue
+            servers_by_source.setdefault(source, {})[name] = server_config
+
+        artifacts: list[GuardArtifact] = []
+        for source, source_servers in servers_by_source.items():
+            artifacts.extend(self._mcp_artifacts(source_servers, str(manifest_path), source=source))
+        return artifacts
 
     def _mcp_artifacts(
         self,

@@ -25,6 +25,20 @@ def _current_proxy_config(context: HarnessContext, store: GuardStore) -> GuardCo
     return overlay_synced_guard_policy(local_config, _synced_policy_payload(store))
 
 
+# Hermes CLI flags/env vars that make Hermes bypass its own approval prompts
+# entirely, independent of anything Guard does. Launching Hermes with one of
+# these present would let it silently defeat Guard's MCP proxy/PreToolUse
+# checks with no warning to the operator.
+_HERMES_BYPASS_FLAG_TOKENS = frozenset({"-z", "--oneshot", "--yolo", "--safe-mode", "--accept-hooks"})
+_HERMES_BYPASS_ENV_VARS = frozenset({"HERMES_ACCEPT_HOOKS"})
+
+
+def _hermes_bypass_offenders(passthrough_args: list[str]) -> list[str]:
+    offenders = [arg for arg in passthrough_args if arg.split("=", 1)[0] in _HERMES_BYPASS_FLAG_TOKENS]
+    offenders.extend(name for name in sorted(_HERMES_BYPASS_ENV_VARS) if os.environ.get(name))
+    return offenders
+
+
 def _run_guard_codex_mcp_proxy_command(
     args: argparse.Namespace,
     *,
@@ -304,14 +318,25 @@ def _run_guard_run_command(
     input_text: str | None = None,
     output_stream: TextIO | None = None,
 ) -> int:
+    try:
+        selected_harness = get_adapter(str(args.harness)).harness
+    except ValueError:
+        selected_harness = str(args.harness)
     grok_executable = getattr(args, "grok_executable", None)
-    if isinstance(grok_executable, str) and grok_executable.strip():
-        try:
-            selected_harness = get_adapter(str(args.harness)).harness
-        except ValueError:
-            selected_harness = str(args.harness)
-        if selected_harness != "grok":
-            print("Error: --grok-executable can only be used with the Grok harness.", file=sys.stderr)
+    if isinstance(grok_executable, str) and grok_executable.strip() and selected_harness != "grok":
+        print("Error: --grok-executable can only be used with the Grok harness.", file=sys.stderr)
+        return 2
+    if selected_harness == "hermes":
+        bypass_offenders = _hermes_bypass_offenders(list(args.passthrough_args))
+        if bypass_offenders:
+            print(
+                "Error: refusing to start Hermes under Guard with "
+                f"{', '.join(bypass_offenders)} present. These make Hermes bypass its own "
+                "approval prompts, which would silently defeat Guard's protection with no "
+                "warning. Remove them to run under Guard, or run plain `hermes` (unprotected, "
+                "outside `hol-guard run`/`guard-hermes`) if you intend to bypass protection.",
+                file=sys.stderr,
+            )
             return 2
     store = _require_guard_store(store)
     context = _require_guard_context(context)

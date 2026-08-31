@@ -14,7 +14,7 @@ class _PublicSuffixList(Protocol):
 
 
 class _PublicSuffixListFactory(Protocol):
-    def __call__(self) -> _PublicSuffixList: ...
+    def __call__(self, *, accept_unknown: bool = ...) -> _PublicSuffixList: ...
 
 
 @lru_cache(maxsize=1)
@@ -22,7 +22,12 @@ def _bundled_psl() -> _PublicSuffixList:
     # The lockfile-pinned dependency embeds its PSL snapshot; never invoke its updater here.
     module = importlib.import_module("publicsuffixlist")
     factory = cast(_PublicSuffixListFactory, module.PublicSuffixList)
-    return factory()
+    # `accept_unknown=False` disables the PSL algorithm's default wildcard
+    # fallback rule, which otherwise treats *any* unrecognized final label as
+    # a valid ad-hoc suffix (e.g. `proc.returncode` would otherwise resolve
+    # as if `.returncode` were a real TLD). Callers that need a real,
+    # registrable-domain signal — not "any dotted string" — depend on this.
+    return factory(accept_unknown=False)
 
 
 def registrable_domain(host: str) -> str | None:

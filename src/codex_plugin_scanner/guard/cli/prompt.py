@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -70,6 +71,20 @@ def resolve_interactive_decisions(
 
     terminal = console or Console()
     ask = input_func or terminal.input
+    using_real_stdin = input_func is None
+    if using_real_stdin and not sys.stdin.isatty():
+        # No caller-supplied answer source and no real terminal attached: a
+        # prompt loop here would either hang or silently consume whatever
+        # happens to be sitting in a buffered/piped stdin. Fail clearly
+        # instead of looping.
+        evaluation["review_hint"] = (
+            "Guard needs an interactive terminal to approve changes. "
+            f"Run `hol-guard diff {review_items[0].harness}` and allow or deny the artifact before launch."
+        )
+        evaluation["blocked"] = True
+        return evaluation
+    if using_real_stdin:
+        _drain_buffered_stdin()
     blocked = False
     decisions_by_artifact = {
         str(item.get("artifact_id")): item for item in _coerce_artifact_results(evaluation.get("artifacts"))
@@ -242,7 +257,26 @@ def _prompt_for_artifact(
         if normalized in {"5", "details", "show-details", "show_details"}:
             console.print(_build_detail_panel(artifact))
             continue
-        console.print("[yellow]Enter 1, 2, 3, 4, or 5.[/yellow]")
+        received = choice if choice else "(nothing typed)"
+        console.print(f"[yellow]Enter 1, 2, 3, 4, or 5. Received: {received!r}[/yellow]")
+
+
+def _drain_buffered_stdin() -> None:
+    """Best-effort discard of any input already queued on stdin.
+
+    A pasted multi-line shell command run just before an interactive Guard
+    prompt can leave extra lines sitting in the terminal's input buffer.
+    Without draining them, the first ``input()`` call silently consumes that
+    leftover text instead of waiting for a real keystroke. This is
+    POSIX-only (termios); on platforms without it, this is a no-op.
+    """
+
+    try:
+        import termios
+
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    except Exception:
+        pass
 
 
 def _build_prompt_panel(artifact: PromptArtifact) -> Panel:
@@ -268,7 +302,12 @@ def _build_prompt_panel(artifact: PromptArtifact) -> Panel:
         Text.assemble(("4", "red"), " block"),
         Text.assemble(("5", "yellow"), " show details"),
     ]
-    content = Group(table, Text(""), *menu)
+    tip = Text(
+        f"Tip: run `hol-guard allow {artifact.harness} --scope harness` to allow "
+        "future artifacts from this harness without prompting.",
+        style="dim",
+    )
+    content = Group(table, Text(""), *menu, Text(""), tip)
     return Panel(content, title="Guard review", border_style="yellow")
 
 

@@ -56,6 +56,14 @@ def _cloud_guard_sync_auth_context(store: GuardStore) -> dict[str, object]:
     return _local_resolve_guard_sync_auth_context(store)
 
 
+def _confirm_guard_cloud_login(connect_url: str) -> bool:
+    try:
+        answer = input(f"Sign in to Guard Cloud at {connect_url}? This opens a browser device flow. [y/N] ")
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer.strip().lower() in {"y", "yes"}
+
+
 def _run_guard_login_command(
     args: argparse.Namespace,
     *,
@@ -74,6 +82,21 @@ def _run_guard_login_command(
         if payload is not None:
             _emit("login", payload, getattr(args, "json", False))
         return exit_code
+    # `init`'s "cloud" step asks for confirmation before starting an OAuth
+    # device flow (see `_approve_init_step` in commands_support_workspace.py).
+    # This command has no equivalent gate: anything that invokes it — a
+    # web-triggered install link included, not just a user typing
+    # `hol-guard login` themselves — starts the device flow unconditionally,
+    # which is how a repeated/unexpected Cloud login prompt was reported.
+    if (
+        not getattr(args, "json", False)
+        and not bool(getattr(args, "yes", False))
+        and sys.stdin.isatty()
+        and not _confirm_guard_cloud_login(str(args.connect_url))
+    ):
+        payload = {"generated_at": _now(), "skipped": True, "reason": "user_declined"}
+        _emit("login", payload, False)
+        return 0
     payload, exit_code = _build_guard_device_connect_payload(
         store=store,
         connect_url=args.connect_url,

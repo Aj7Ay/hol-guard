@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import shutil
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -238,6 +239,41 @@ def _run_guard_policy_action_command(
     return 0
 
 
+def _doctor_artifact_change_summary(
+    harness: str,
+    context: HarnessContext,
+    store: GuardStore,
+    config: GuardConfig,
+) -> dict[str, object]:
+    """Report which artifacts changed since the last scan, not just a count.
+
+    `doctor`'s artifact count is a live filesystem scan and can legitimately
+    vary run-to-run with the environment; without this, a count that moves
+    from 349 to 350 gives the user no way to tell what changed.
+    """
+
+    try:
+        detection = detect_harness(harness, context)
+        evaluation = evaluate_detection(detection, store, config, default_action="allow", persist=False)
+    except Exception:
+        return {"available": False}
+    raw_artifacts = evaluation.get("artifacts")
+    artifacts = [item for item in raw_artifacts if isinstance(item, dict)] if isinstance(raw_artifacts, list) else []
+    changed = [item for item in artifacts if bool(item.get("changed"))]
+    return {
+        "available": True,
+        "total": len(artifacts),
+        "changed_count": len(changed),
+        "changed": [
+            {
+                "artifact_id": item.get("artifact_id"),
+                "changed_fields": item.get("changed_fields"),
+            }
+            for item in changed
+        ],
+    }
+
+
 def _run_guard_doctor_command(
     args: argparse.Namespace,
     *,
@@ -298,6 +334,7 @@ def _run_guard_doctor_command(
         payload: dict[str, object] = adapter.diagnostics(context)
         payload["runtime_detector_registry"] = _runtime_detector_registry_payload(config)
         payload["connect_health"] = _guard_doctor_connect_health_payload(store)
+        payload["artifact_changes"] = _doctor_artifact_change_summary(args.harness, context, store, config)
         if args.harness == "codex":
             payload["codex_resume"] = inspect_codex_resume_capabilities(store)
     else:
@@ -360,6 +397,61 @@ def _run_guard_doctor_command(
     return 0
 
 
+def _run_guard_verify_launcher_command(
+    args: argparse.Namespace,
+    *,
+    guard_home: Path | None = None,
+    workspace: Path | None = None,
+    context: HarnessContext | None = None,
+    store: GuardStore | None = None,
+    config: GuardConfig | None = None,
+    input_text: str | None = None,
+    output_stream: TextIO | None = None,
+) -> int:
+    """Report whether the plain command name for a harness (e.g. `hermes` on
+    PATH) resolves to the Guard-protected launcher shim, or to something
+    unprotected. A user cannot tell a protected session from an unprotected
+    one just by looking at it; this makes that check explicit.
+    """
+
+    context = _require_guard_context(context)
+    harness = str(args.harness)
+    try:
+        adapter = get_adapter(harness)
+    except ValueError:
+        _emit(
+            "verify-launcher",
+            {"generated_at": _now(), "harness": harness, "error": f"Unknown harness: {harness}"},
+            getattr(args, "json", False),
+        )
+        return 2
+    command_name = adapter.executable
+    resolved = shutil.which(command_name)
+    shim_path = context.guard_home / "bin" / f"guard-{harness}"
+    protected = (
+        resolved is not None and shim_path.exists() and Path(resolved).resolve() == shim_path.resolve()
+    )
+    payload: dict[str, object] = {
+        "generated_at": _now(),
+        "harness": harness,
+        "command": command_name,
+        "resolved_path": resolved,
+        "guard_shim_path": str(shim_path),
+        "protected": protected,
+    }
+    if resolved is None:
+        payload["warning"] = f"`{command_name}` was not found on PATH."
+    elif not protected:
+        payload["warning"] = (
+            f"`{command_name}` on PATH resolves to {resolved}, not the Guard-protected launcher "
+            f"({shim_path}). A session started with plain `{command_name}` runs with no Guard "
+            f"protection. Run `hol-guard run {harness}` or `{shim_path.name}` directly, or put "
+            f"{shim_path.parent} ahead of {Path(resolved).parent} on PATH."
+        )
+    _emit("verify-launcher", payload, getattr(args, "json", False))
+    return 0 if protected else 1
+
+
 __all__ = [
     "_run_guard_advisories_command",
     "_run_guard_approvals_command",
@@ -368,4 +460,5 @@ __all__ = [
     "_run_guard_exceptions_command",
     "_run_guard_explain_command",
     "_run_guard_policy_action_command",
+    "_run_guard_verify_launcher_command",
 ]
