@@ -1118,9 +1118,27 @@ def evaluate_detection(
             # which still widens below regardless of the configured default.
             pass
         else:
+            effective_scanner_action = scanner_action
+            if (
+                is_first_seen
+                and configured_action is None
+                and current_policy_action == "review"
+                and scanner_action == "require-reapproval"
+            ):
+                # A first-seen artifact is classified `review` (not
+                # `require-reapproval`) specifically so a saved harness/global
+                # `allow` rule can clear it (see runtime/approval_reuse.py,
+                # which never lets standing policy satisfy
+                # `require-reapproval`). The scanner's *heuristic* severity
+                # scoring (unknown publisher, capability deltas, ...) landing
+                # at `require-reapproval` must not silently re-escalate a
+                # first-seen artifact back into that unbypassable tier — a
+                # genuine hard signal (`sandbox-required`/`block`) still
+                # passes through unchanged below.
+                effective_scanner_action = "review"
             current_policy_action = most_restrictive_guard_action(
                 current_policy_action,
-                scanner_action,
+                effective_scanner_action,
             )
         skill_directory_identity_reusable = _skill_directory_identity_reusable(
             artifact_type=artifact.artifact_type,
